@@ -267,10 +267,7 @@ let processor;
 let analyser;
 let isTalking = false;
 let currentMicId = null;
-
-// Get backend URL from localStorage or use default
-const backendUrl = localStorage.getItem('broadcasterBackendUrl') || 'https://your-backend.onrender.com';
-streamUrlEl.textContent = `${backendUrl}/stream.mp3`;
+let backendUrl = null;
 
 function showError(msg) {
   errorMsg.textContent = msg;
@@ -283,6 +280,19 @@ function updateStatus(text, ready = false) {
   statusDot.className = `status-dot ${ready ? 'ready' : ''}`;
   if (ready) statusText.classList.add('ready');
   else statusText.classList.remove('ready');
+}
+
+// Show connection form on load
+function showConnectionForm() {
+  const form = prompt('Enter your Render backend URL:\n(e.g., https://my-broadcaster.onrender.com)');
+  if (form && form.trim()) {
+    backendUrl = form.trim();
+    streamUrlEl.textContent = `${backendUrl}/stream.mp3`;
+    updateStatus('Ready', true);
+    loadMicrophones();
+  } else {
+    updateStatus('No backend URL entered', false);
+  }
 }
 
 // Enumerate microphones
@@ -304,7 +314,6 @@ async function loadMicrophones() {
       updateStatus('No microphones', false);
     } else {
       currentMicId = mics[0].deviceId;
-      updateStatus('Ready', true);
     }
   } catch (e) {
     showError(`Error loading mics: ${e.message}`);
@@ -314,14 +323,13 @@ async function loadMicrophones() {
 micSelect.onchange = () => {
   currentMicId = micSelect.value;
   if (isTalking) {
-    // Restart with new mic
     stopTalking();
     setTimeout(startTalking, 100);
   }
 };
 
 async function startTalking() {
-  if (isTalking) return;
+  if (isTalking || !backendUrl) return;
   
   try {
     if (!audioContext) {
@@ -347,8 +355,6 @@ async function startTalking() {
     isTalking = true;
     pttBtn.classList.add('active');
     monitorMicLevel();
-    
-    // Send audio to backend
     sendAudioToBackend();
 
   } catch (e) {
@@ -398,7 +404,6 @@ async function sendAudioToBackend() {
         int16Data[i] = Math.max(-1, Math.min(1, audioData[i])) * 0x7fff;
       }
 
-      // Send to backend
       fetch(`${backendUrl}/upload-audio`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
@@ -406,7 +411,6 @@ async function sendAudioToBackend() {
       }).catch(e => console.error('Upload error:', e));
     };
 
-    // Keep sending while talking
     while (isTalking) {
       await new Promise(r => setTimeout(r, 100));
     }
@@ -425,7 +429,7 @@ pttBtn.addEventListener('mouseleave', stopTalking);
 
 // Spacebar PTT
 document.addEventListener('keydown', (e) => {
-  if (e.code === 'Space' && !isTalking) {
+  if (e.code === 'Space' && !isTalking && backendUrl) {
     e.preventDefault();
     startTalking();
   }
@@ -438,18 +442,9 @@ document.addEventListener('keyup', (e) => {
   }
 });
 
-// Initialize
-loadMicrophones();
+// Start with connection form
+showConnectionForm();
 navigator.mediaDevices.addEventListener('devicechange', loadMicrophones);
-
-// Allow user to set backend URL
-if (!localStorage.getItem('broadcasterBackendUrl')) {
-  const url = prompt('Enter your Render backend URL\n(e.g., https://my-broadcaster.onrender.com)');
-  if (url) {
-    localStorage.setItem('broadcasterBackendUrl', url);
-    location.reload();
-  }
-}
 </script>
 
 </body>

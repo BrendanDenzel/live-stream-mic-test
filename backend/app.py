@@ -1,17 +1,45 @@
 import os
-from flask import Flask, request, send_file, Response
-from flask_cors import CORS
-import io
+import subprocess
 import threading
-from collections import deque
-import numpy as np
+import time
+from flask import Flask, request
+from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-# Audio buffer (stores last 30 seconds of audio)
-audio_buffer = deque(maxlen=480000)  # ~30 sec at 16kHz
-buffer_lock = threading.Lock()
+# Start Icecast in background
+def start_icecast():
+    try:
+        # Create icecast.xml config
+        icecast_config = """<icecast>
+  <limits>
+    <clients>100</clients>
+    <sources>10</sources>
+  </limits>
+  <authentication>
+    <source-password>testing123</source-password>
+    <admin-user>admin</admin-user>
+    <admin-password>admin123</admin-password>
+  </authentication>
+  <listen-socket>
+    <port>8000</port>
+    <bind-address>0.0.0.0</bind-address>
+  </listen-socket>
+  <mount>
+    <mount-name>/stream</mount-name>
+    <description>Test Stream</description>
+  </mount>
+</icecast>"""
+        
+        with open('icecast.xml', 'w') as f:
+            f.write(icecast_config)
+        
+        # Start icecast
+        subprocess.Popen(['icecast', '-c', 'icecast.xml'])
+        print("Icecast started on port 8000")
+    except Exception as e:
+        print(f"Icecast error: {e}")
 
 @app.route('/ping')
 def ping():
@@ -19,74 +47,40 @@ def ping():
 
 @app.route('/upload-audio', methods=['POST'])
 def upload_audio():
-    """Receive audio chunks from broadcaster"""
+    """Receive audio from broadcaster and send to Icecast"""
     try:
         audio_bytes = request.data
         if len(audio_bytes) < 2:
             return {'status': 'ok'}, 200
         
-        # Convert bytes to int16 array
-        audio_int16 = np.frombuffer(audio_bytes, dtype=np.int16)
+        # Send directly to Icecast
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect(('localhost', 8000))
         
-        with buffer_lock:
-            for sample in audio_int16:
-                audio_buffer.append(sample)
+        # Icecast SOURCE protocol
+        auth = 'testing123'
+        request_str = f"""SOURCE /stream HTTP/1.0\r
+Authorization: Basic {__import__('base64').b64encode(f'source:{auth}'.encode()).decode()}\r
+Content-Type: audio/mpeg\r
+Content-Length: {len(audio_bytes)}\r
+\r
+"""
+        sock.sendall(request_str.encode() + audio_bytes)
+        sock.close()
         
-        return {'status': 'ok', 'samples': len(audio_int16)}, 200
+        return {'status': 'ok'}, 200
     except Exception as e:
         print(f"Upload error: {e}")
         return {'error': str(e)}, 400
 
-@app.route('/stream.mp3')
-def stream():
-    """Stream audio as MP3"""
-    def generate():
-        from pydub import AudioSegment
-        import time
-        
-        last_size = 0
-        
-        while True:
-            try:
-                with buffer_lock:
-                    current_size = len(audio_buffer)
-                    if current_size == 0:
-                        audio_array = np.zeros(16000, dtype=np.int16)
-                    else:
-                        audio_array = np.array(list(audio_buffer), dtype=np.int16)
-                
-                # Convert to MP3
-                audio_segment = AudioSegment(
-                    audio_array.tobytes(),
-                    frame_rate=16000,
-                    sample_width=2,
-                    channels=1
-                )
-                
-                mp3_buffer = io.BytesIO()
-                audio_segment.export(mp3_buffer, format="mp3", bitrate="128k")
-                mp3_buffer.seek(0)
-                
-                yield mp3_buffer.read()
-                time.sleep(2)  # Send new MP3 chunk every 2 seconds
-                
-            except Exception as e:
-                print(f"Stream error: {e}")
-                break
-    
-    return Response(generate(), mimetype='audio/mpeg')
-
-
 @app.route('/status')
 def status():
-    """Check backend status"""
-    with buffer_lock:
-        buffer_size = len(audio_buffer)
-    return {
-        'status': 'running',
-        'buffer_samples': buffer_size,
-        'buffer_seconds': buffer_size / 16000
-    }, 200
+    return {'status': 'running', 'icecast': 'http://localhost:8000'}, 200
+
+# Start Icecast on app startup
+threading.Thread(target=start_icecast, daemon=True).start()
+time.sleep(2)  # Wait for Icecast to start
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

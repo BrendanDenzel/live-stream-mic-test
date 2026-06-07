@@ -39,8 +39,11 @@ def upload_audio():
 
 @app.route('/stream.mp3')
 def stream():
-    """Stream audio as continuous live PCM"""
+    """Stream audio as MP3"""
     def generate():
+        from pydub import AudioSegment
+        import time
+        
         last_size = 0
         
         while True:
@@ -52,18 +55,21 @@ def stream():
                     else:
                         audio_array = np.array(list(audio_buffer), dtype=np.int16)
                 
-                # Only send new audio since last chunk
-                if current_size > last_size:
-                    new_audio = audio_array[last_size:]
-                    yield new_audio.tobytes()
-                    last_size = current_size
-                else:
-                    # Send silence if nothing new
-                    silence = np.zeros(16000, dtype=np.int16)
-                    yield silence.tobytes()
+                # Convert to MP3
+                audio_segment = AudioSegment(
+                    audio_array.tobytes(),
+                    frame_rate=16000,
+                    sample_width=2,
+                    channels=1
+                )
                 
-                import time
-                time.sleep(0.5)
+                mp3_buffer = io.BytesIO()
+                audio_segment.export(mp3_buffer, format="mp3", bitrate="128k")
+                mp3_buffer.seek(0)
+                
+                yield mp3_buffer.read()
+                time.sleep(2)  # Send new MP3 chunk every 2 seconds
+                
             except Exception as e:
                 print(f"Stream error: {e}")
                 break

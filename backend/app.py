@@ -45,26 +45,22 @@ def stream():
             if len(audio_buffer) == 0:
                 # Return silence if no audio
                 silent_audio = np.zeros(44100, dtype=np.int16)
-                audio_data = silent_audio.tobytes()
+                audio_bytes = silent_audio.tobytes()
             else:
-                audio_data = bytes(audio_buffer)
+                # Convert deque to bytes
+                audio_array = np.array(list(audio_buffer), dtype=np.int16)
+                audio_bytes = audio_array.tobytes()
         
-        # Convert to float for scipy
-        audio_float = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-        
-        # Create WAV in memory then convert to MP3
+        # Return as WAV (simpler than MP3)
+        import wave
         wav_buffer = io.BytesIO()
         
-        # Write WAV header
         sample_rate = 16000
-        num_channels = 1
-        
-        import wave
         with wave.open(wav_buffer, 'wb') as wav:
-            wav.setnchannels(num_channels)
+            wav.setnchannels(1)
             wav.setsampwidth(2)
             wav.setframerate(sample_rate)
-            wav.writeframes(audio_float.astype(np.int16).tobytes())
+            wav.writeframes(audio_bytes)
         
         wav_buffer.seek(0)
         
@@ -76,6 +72,8 @@ def stream():
         )
     except Exception as e:
         print(f"Stream error: {e}")
+        import traceback
+        traceback.print_exc()
         return {'error': str(e)}, 500
 
 @app.route('/status')

@@ -1,0 +1,19 @@
+<icecast>
+  <limits>
+    <clients>100</clients>
+    <sources>10</sources>
+  </limits>
+  <authentication>
+    <source-password>testing123</source-password>
+    <admin-user>admin</admin-user>
+    <admin-password>admin123</admin-password>
+  </authentication>
+  <listen-socket>
+    <port>8000</port>
+    <bind-address>0.0.0.0</bind-address>
+  </listen-socket>
+  <mount>
+    <mount-name>/stream</mount-name>
+    <description>Test Stream</description>
+  </mount>
+</icecast>

@@ -39,37 +39,41 @@ def upload_audio():
 
 @app.route('/stream.mp3')
 def stream():
-    """Stream audio as continuous MP3"""
+    """Stream audio as continuous live MP3"""
     def generate():
-        try:
-            import wave
-            
-            while True:
+        import wave
+        
+        while True:
+            try:
                 with buffer_lock:
                     if len(audio_buffer) == 0:
                         audio_array = np.zeros(16000, dtype=np.int16)
                     else:
                         audio_array = np.array(list(audio_buffer), dtype=np.int16)
                 
-                # Create WAV chunk
+                # Create small WAV chunk (1 second)
+                chunk_size = 16000  # 1 second at 16kHz
+                audio_chunk = audio_array[-chunk_size:] if len(audio_array) >= chunk_size else audio_array
+                
                 wav_buffer = io.BytesIO()
                 with wave.open(wav_buffer, 'wb') as wav:
                     wav.setnchannels(1)
                     wav.setsampwidth(2)
                     wav.setframerate(16000)
-                    wav.writeframes(audio_array.tobytes())
+                    wav.writeframes(audio_chunk.tobytes())
                 
                 wav_buffer.seek(0)
-                chunk = wav_buffer.read()
-                if chunk:
-                    yield chunk
+                yield wav_buffer.read()
                 
-                # Small delay to prevent CPU spinning
-                threading.Event().wait(0.1)
-        except Exception as e:
-            print(f"Stream error: {e}")
+                # Send new chunk every 1 second
+                import time
+                time.sleep(1)
+            except Exception as e:
+                print(f"Stream error: {e}")
+                break
     
-    return Response(generate(), mimetype='audio/mpeg')
+    return Response(generate(), mimetype='audio/mpeg', headers={'Content-Type': 'audio/mpeg'})
+
 
 @app.route('/status')
 def status():

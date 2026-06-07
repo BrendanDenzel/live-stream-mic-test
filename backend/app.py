@@ -1,17 +1,11 @@
 import os
-from flask import Flask, request, send_file, Response
+from flask import Flask, request
 from flask_cors import CORS
-import io
-import threading
-from collections import deque
-import numpy as np
+import socket
+import base64
 
 app = Flask(__name__)
 CORS(app)
-
-# Audio buffer
-audio_buffer = deque(maxlen=480000)  # ~30 sec at 16kHz
-buffer_lock = threading.Lock()
 
 @app.route('/ping')
 def ping():
@@ -19,65 +13,30 @@ def ping():
 
 @app.route('/upload-audio', methods=['POST'])
 def upload_audio():
-    """Receive audio chunks from broadcaster"""
+    """Send audio to Icecast"""
     try:
         audio_bytes = request.data
         if len(audio_bytes) < 2:
             return {'status': 'ok'}, 200
         
-        audio_int16 = np.frombuffer(audio_bytes, dtype=np.int16)
+        # Connect to Icecast and send audio
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect(('localhost', 8000))
         
-        with buffer_lock:
-            for sample in audio_int16:
-                audio_buffer.append(sample)
+        auth = base64.b64encode(b'source:testing123').decode()
+        request_str = f"SOURCE /stream HTTP/1.0\r\nAuthorization: Basic {auth}\r\nContent-Type: audio/mpeg\r\n\r\n"
         
-        return {'status': 'ok', 'samples': len(audio_int16)}, 200
+        sock.sendall(request_str.encode() + audio_bytes)
+        sock.close()
+        
+        return {'status': 'ok'}, 200
     except Exception as e:
         print(f"Upload error: {e}")
         return {'error': str(e)}, 400
 
-@app.route('/stream')
-def stream():
-    """Stream audio as continuous live audio"""
-    def generate():
-        import wave
-        
-        while True:
-            try:
-                with buffer_lock:
-                    if len(audio_buffer) == 0:
-                        audio_array = np.zeros(16000, dtype=np.int16)
-                    else:
-                        audio_array = np.array(list(audio_buffer), dtype=np.int16)
-                
-                # Create WAV chunk
-                wav_buffer = io.BytesIO()
-                with wave.open(wav_buffer, 'wb') as wav:
-                    wav.setnchannels(1)
-                    wav.setsampwidth(2)
-                    wav.setframerate(16000)
-                    wav.writeframes(audio_array.tobytes())
-                
-                wav_buffer.seek(0)
-                yield wav_buffer.read()
-                
-                import time
-                time.sleep(1)
-            except Exception as e:
-                print(f"Stream error: {e}")
-                break
-    
-    return Response(generate(), mimetype='audio/wav')
-
 @app.route('/status')
 def status():
-    with buffer_lock:
-        buffer_size = len(audio_buffer)
-    return {
-        'status': 'running',
-        'buffer_samples': buffer_size,
-        'buffer_seconds': buffer_size / 16000
-    }, 200
+    return {'status': 'running', 'icecast': 'http://localhost:8000/stream'}, 200
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

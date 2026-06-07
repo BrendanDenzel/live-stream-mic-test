@@ -1,45 +1,17 @@
 import os
-import subprocess
-import threading
-import time
-from flask import Flask, request
+from flask import Flask, request, send_file, Response
 from flask_cors import CORS
+import io
+import threading
+from collections import deque
+import numpy as np
 
 app = Flask(__name__)
 CORS(app)
 
-# Start Icecast in background
-def start_icecast():
-    try:
-        # Create icecast.xml config
-        icecast_config = """<icecast>
-  <limits>
-    <clients>100</clients>
-    <sources>10</sources>
-  </limits>
-  <authentication>
-    <source-password>testing123</source-password>
-    <admin-user>admin</admin-user>
-    <admin-password>admin123</admin-password>
-  </authentication>
-  <listen-socket>
-    <port>8000</port>
-    <bind-address>0.0.0.0</bind-address>
-  </listen-socket>
-  <mount>
-    <mount-name>/stream</mount-name>
-    <description>Test Stream</description>
-  </mount>
-</icecast>"""
-        
-        with open('icecast.xml', 'w') as f:
-            f.write(icecast_config)
-        
-        # Start icecast
-        subprocess.Popen(['icecast', '-c', 'icecast.xml'])
-        print("Icecast started on port 8000")
-    except Exception as e:
-        print(f"Icecast error: {e}")
+# Audio buffer
+audio_buffer = deque(maxlen=480000)  # ~30 sec at 16kHz
+buffer_lock = threading.Lock()
 
 @app.route('/ping')
 def ping():
@@ -47,40 +19,65 @@ def ping():
 
 @app.route('/upload-audio', methods=['POST'])
 def upload_audio():
-    """Receive audio from broadcaster and send to Icecast"""
+    """Receive audio chunks from broadcaster"""
     try:
         audio_bytes = request.data
         if len(audio_bytes) < 2:
             return {'status': 'ok'}, 200
         
-        # Send directly to Icecast
-        import socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect(('localhost', 8000))
+        audio_int16 = np.frombuffer(audio_bytes, dtype=np.int16)
         
-        # Icecast SOURCE protocol
-        auth = 'testing123'
-        request_str = f"""SOURCE /stream HTTP/1.0\r
-Authorization: Basic {__import__('base64').b64encode(f'source:{auth}'.encode()).decode()}\r
-Content-Type: audio/mpeg\r
-Content-Length: {len(audio_bytes)}\r
-\r
-"""
-        sock.sendall(request_str.encode() + audio_bytes)
-        sock.close()
+        with buffer_lock:
+            for sample in audio_int16:
+                audio_buffer.append(sample)
         
-        return {'status': 'ok'}, 200
+        return {'status': 'ok', 'samples': len(audio_int16)}, 200
     except Exception as e:
         print(f"Upload error: {e}")
         return {'error': str(e)}, 400
 
+@app.route('/stream')
+def stream():
+    """Stream audio as continuous live audio"""
+    def generate():
+        import wave
+        
+        while True:
+            try:
+                with buffer_lock:
+                    if len(audio_buffer) == 0:
+                        audio_array = np.zeros(16000, dtype=np.int16)
+                    else:
+                        audio_array = np.array(list(audio_buffer), dtype=np.int16)
+                
+                # Create WAV chunk
+                wav_buffer = io.BytesIO()
+                with wave.open(wav_buffer, 'wb') as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(16000)
+                    wav.writeframes(audio_array.tobytes())
+                
+                wav_buffer.seek(0)
+                yield wav_buffer.read()
+                
+                import time
+                time.sleep(1)
+            except Exception as e:
+                print(f"Stream error: {e}")
+                break
+    
+    return Response(generate(), mimetype='audio/wav')
+
 @app.route('/status')
 def status():
-    return {'status': 'running', 'icecast': 'http://localhost:8000'}, 200
-
-# Start Icecast on app startup
-threading.Thread(target=start_icecast, daemon=True).start()
-time.sleep(2)  # Wait for Icecast to start
+    with buffer_lock:
+        buffer_size = len(audio_buffer)
+    return {
+        'status': 'running',
+        'buffer_samples': buffer_size,
+        'buffer_seconds': buffer_size / 16000
+    }, 200
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

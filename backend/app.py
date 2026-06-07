@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, send_file
+from flask import Flask, request, send_file, Response
 from flask_cors import CORS
 import io
 import threading
@@ -10,7 +10,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Audio buffer (stores last 30 seconds of audio)
-audio_buffer = deque(maxlen=1323000)  # ~30 sec at 44.1kHz
+audio_buffer = deque(maxlen=480000)  # ~30 sec at 16kHz
 buffer_lock = threading.Lock()
 
 @app.route('/ping')
@@ -39,42 +39,37 @@ def upload_audio():
 
 @app.route('/stream.mp3')
 def stream():
-    """Stream audio as MP3"""
-    try:
-        with buffer_lock:
-            if len(audio_buffer) == 0:
-                # Return silence if no audio
-                silent_audio = np.zeros(44100, dtype=np.int16)
-                audio_bytes = silent_audio.tobytes()
-            else:
-                # Convert deque to bytes
-                audio_array = np.array(list(audio_buffer), dtype=np.int16)
-                audio_bytes = audio_array.tobytes()
-        
-        # Return as WAV (simpler than MP3)
-        import wave
-        wav_buffer = io.BytesIO()
-        
-        sample_rate = 16000
-        with wave.open(wav_buffer, 'wb') as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(sample_rate)
-            wav.writeframes(audio_bytes)
-        
-        wav_buffer.seek(0)
-        
-        return send_file(
-            wav_buffer,
-            mimetype='audio/wav',
-            as_attachment=False,
-            download_name='stream.wav'
-        )
-    except Exception as e:
-        print(f"Stream error: {e}")
-        import traceback
-        traceback.print_exc()
-        return {'error': str(e)}, 500
+    """Stream audio as continuous MP3"""
+    def generate():
+        try:
+            import wave
+            
+            while True:
+                with buffer_lock:
+                    if len(audio_buffer) == 0:
+                        audio_array = np.zeros(16000, dtype=np.int16)
+                    else:
+                        audio_array = np.array(list(audio_buffer), dtype=np.int16)
+                
+                # Create WAV chunk
+                wav_buffer = io.BytesIO()
+                with wave.open(wav_buffer, 'wb') as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(16000)
+                    wav.writeframes(audio_array.tobytes())
+                
+                wav_buffer.seek(0)
+                chunk = wav_buffer.read()
+                if chunk:
+                    yield chunk
+                
+                # Small delay to prevent CPU spinning
+                threading.Event().wait(0.1)
+        except Exception as e:
+            print(f"Stream error: {e}")
+    
+    return Response(generate(), mimetype='audio/mpeg')
 
 @app.route('/status')
 def status():

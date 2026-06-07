@@ -39,40 +39,36 @@ def upload_audio():
 
 @app.route('/stream.mp3')
 def stream():
-    """Stream audio as continuous live MP3"""
+    """Stream audio as continuous live PCM"""
     def generate():
-        import wave
+        last_size = 0
         
         while True:
             try:
                 with buffer_lock:
-                    if len(audio_buffer) == 0:
+                    current_size = len(audio_buffer)
+                    if current_size == 0:
                         audio_array = np.zeros(16000, dtype=np.int16)
                     else:
                         audio_array = np.array(list(audio_buffer), dtype=np.int16)
                 
-                # Create small WAV chunk (1 second)
-                chunk_size = 16000  # 1 second at 16kHz
-                audio_chunk = audio_array[-chunk_size:] if len(audio_array) >= chunk_size else audio_array
+                # Only send new audio since last chunk
+                if current_size > last_size:
+                    new_audio = audio_array[last_size:]
+                    yield new_audio.tobytes()
+                    last_size = current_size
+                else:
+                    # Send silence if nothing new
+                    silence = np.zeros(16000, dtype=np.int16)
+                    yield silence.tobytes()
                 
-                wav_buffer = io.BytesIO()
-                with wave.open(wav_buffer, 'wb') as wav:
-                    wav.setnchannels(1)
-                    wav.setsampwidth(2)
-                    wav.setframerate(16000)
-                    wav.writeframes(audio_chunk.tobytes())
-                
-                wav_buffer.seek(0)
-                yield wav_buffer.read()
-                
-                # Send new chunk every 1 second
                 import time
-                time.sleep(1)
+                time.sleep(0.5)
             except Exception as e:
                 print(f"Stream error: {e}")
                 break
     
-    return Response(generate(), mimetype='audio/mpeg', headers={'Content-Type': 'audio/mpeg'})
+    return Response(generate(), mimetype='audio/mpeg')
 
 
 @app.route('/status')

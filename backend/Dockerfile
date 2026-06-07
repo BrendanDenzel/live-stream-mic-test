@@ -1,16 +1,19 @@
-FROM python:3.11-slim
+FROM ubuntu:22.04
 
-# Install icecast
-RUN apt-get update && apt-get install -y icecast2 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    icecast2 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy files
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip3 install -r requirements.txt
 
 COPY app.py .
-COPY icecast.xml /etc/icecast2/icecast.xml
+COPY icecast.xml .
 
-# Start both icecast and flask app
-CMD icecast2 -c /etc/icecast2/icecast.xml & python app.py
+EXPOSE 5000 8000
+
+CMD bash -c "icecast2 -c icecast.xml & gunicorn --bind 0.0.0.0:5000 app:app"

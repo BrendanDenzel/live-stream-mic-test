@@ -1,7 +1,8 @@
 import os
 import socket
 import base64
-from flask import Flask
+import requests
+from flask import Flask, Response, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
@@ -16,6 +17,22 @@ icecast_sockets = {}
 def ping():
     return 'pong', 200
 
+# ==========================================
+# THIS IS WHERE THE LAST PYTHON BLOCK GOES:
+# ==========================================
+@app.route('/stream.mp3')
+def stream_audio():
+    """Proxies the internal Icecast stream to external listeners"""
+    def generate():
+        # Connects to the local Icecast instance running in the background
+        with requests.get("http://127.0.0", stream=True) as r:
+            for chunk in r.iter_content(chunk_size=4096):
+                yield chunk
+    return Response(generate(), mimetype="audio/mpeg")
+
+# ==========================================
+# WEBSOCKET EVENTS FOR THE BROADCASTER:
+# ==========================================
 @socketio.on('connect')
 def handle_connect():
     print("Client connected via WebSocket")
@@ -25,7 +42,7 @@ def start_stream():
     """Initializes the persistent Icecast source connection"""
     session_id = request.sid if hasattr(request, 'sid') else 'default'
     try:
-        # Open persistent socket to Icecast
+        # Open persistent TCP socket to background Icecast
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect(('127.0.0.1', 8000))
         
@@ -55,7 +72,7 @@ def handle_audio_chunk(data):
     
     if sock:
         try:
-            # data is raw binary bytes from the frontend MP3 encoder
+            # data is raw binary bytes from the frontend browser mic
             sock.sendall(data)
         except Exception as e:
             print(f"Error piping audio to Icecast: {e}")
@@ -76,5 +93,6 @@ def cleanup_socket(session_id):
             pass
 
 if __name__ == '__main__':
-    # Use socketio run fallback for local testing
-    socketio.run(app, host='0.0.0.0', port=5000)
+    # Fallback for running locally without Gunicorn
+    port = int(os.environ.get('PORT', 5000))
+    socketio.run(app, host='0.0.0.0', port=port)
